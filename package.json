@@ -1,0 +1,90 @@
+{
+  "name": "aiverse-manager",
+  "version": "0.2.0",
+  "author": "ByEriX",
+  "license": "MIT",
+  "homepage": "https://github.com/ByEriX/AIVerse",
+  "private": true,
+  "description": "Electron + React Application to manage AI tools, prompts, images, and files.",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev:renderer": "vite --config app/renderer/vite.config.js",
+    "dev:main": "esbuild app/main/main.js --bundle --platform=node --outfile=dist/main/main.js --format=cjs --external:electron --external:better-sqlite3 --external:bindings --external:node-addon-api --watch",
+    "dev:preload": "esbuild app/main/preload.js --bundle --platform=browser --outfile=dist/main/preload.js --format=cjs --external:electron --watch",
+    "dev": "concurrently -k \"npm:dev:*\" \"wait-on tcp:5174 && electron .\"",
+    "build:renderer": "vite build --config app/renderer/vite.config.js",
+    "build:main": "esbuild app/main/main.js --bundle --platform=node --outfile=dist/main/main.js --format=cjs --external:electron --external:better-sqlite3 --external:bindings --external:node-addon-api --minify",
+    "build:preload": "esbuild app/main/preload.js --bundle --platform=browser --outfile=dist/main/preload.js --format=cjs --external:electron --minify",
+    "build": "npm run build:renderer && npm run build:main && npm run build:preload",
+    "start": "electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "rebuild:native": "electron-rebuild",
+    "rebuild:test": "npm rebuild better-sqlite3",
+    "postinstall": "electron-rebuild",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage"
+  },
+  "build": {
+    "appId": "com.aiverse.manager",
+    "productName": "AIVerse Manager",
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "app/renderer/dist/**",
+      "package.json"
+    ],
+    "extraResources": [],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico",
+      "sign": null
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "build/icon.icns"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "build/icons"
+    }
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "chokidar": "^3.6.0",
+    "exifreader": "^4.23.0",
+    "keytar": "^7.9.0",
+    "music-metadata": "^10.5.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.26.2",
+    "sharp": "^0.33.4"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.1",
+    "@testing-library/jest-dom": "^6.1.5",
+    "@testing-library/react": "^14.1.2",
+    "@testing-library/user-event": "^14.5.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^1.6.0",
+    "@vitest/ui": "^1.6.0",
+    "concurrently": "^8.2.2",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "esbuild": "^0.23.0",
+    "jsdom": "^24.0.0",
+    "vite": "^5.2.11",
+    "vitest": "^1.6.0",
+    "wait-on": "^7.2.0"
+  }
+}
