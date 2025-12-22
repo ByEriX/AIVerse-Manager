@@ -147,5 +147,34 @@ describe('Database Module', () => {
     expect(columnNames).toContain('ref_id');
     expect(columnNames).toContain('last_used_at');
   });
+
+  it('should handle migration for missing docs_url column', () => {
+    // The migration should add docs_url if it doesn't exist
+    const columns = db.prepare('PRAGMA table_info(tools)').all();
+    const columnNames = columns.map(c => c.name);
+    
+    expect(columnNames).toContain('docs_url');
+  });
+
+  it('should handle migration for missing app_url column', () => {
+    // The migration should add app_url if it doesn't exist
+    const columns = db.prepare('PRAGMA table_info(tools)').all();
+    const columnNames = columns.map(c => c.name);
+    
+    expect(columnNames).toContain('app_url');
+  });
+
+  it('should allow inserting tools with docs_url and app_url', () => {
+    const stmt = db.prepare(`
+      INSERT INTO tools (name, docs_url, app_url) VALUES (?, ?, ?)
+    `);
+    const result = stmt.run('Test Tool', 'https://docs.example.com', 'https://app.example.com');
+    
+    expect(result.lastInsertRowid).toBeGreaterThan(0);
+    
+    const tool = db.prepare('SELECT * FROM tools WHERE id = ?').get(result.lastInsertRowid);
+    expect(tool.docs_url).toBe('https://docs.example.com');
+    expect(tool.app_url).toBe('https://app.example.com');
+  });
 });
 

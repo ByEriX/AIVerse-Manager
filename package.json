@@ -1,19 +1,19 @@
 {
   "name": "aiverse-manager",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "ByEriX",
   "license": "MIT",
-  "homepage": "https://github.com/ByEriX/AIVerse",
+  "homepage": "https://github.com/ByEriX/AIVerse-Manager",
   "private": true,
   "description": "Electron + React Application to manage AI tools, prompts, images, and files.",
   "main": "dist/main/main.js",
   "scripts": {
     "dev:renderer": "vite --config app/renderer/vite.config.js",
-    "dev:main": "esbuild app/main/main.js --bundle --platform=node --outfile=dist/main/main.js --format=cjs --external:electron --external:better-sqlite3 --external:bindings --external:node-addon-api --watch",
+    "dev:main": "esbuild app/main/main.js --bundle --platform=node --outfile=dist/main/main.js --format=cjs --external:electron --external:better-sqlite3 --external:bindings --external:node-addon-api --external:adm-zip --external:archiver --external:yauzl --watch",
     "dev:preload": "esbuild app/main/preload.js --bundle --platform=browser --outfile=dist/main/preload.js --format=cjs --external:electron --watch",
     "dev": "concurrently -k \"npm:dev:*\" \"wait-on tcp:5174 && electron .\"",
     "build:renderer": "vite build --config app/renderer/vite.config.js",
-    "build:main": "esbuild app/main/main.js --bundle --platform=node --outfile=dist/main/main.js --format=cjs --external:electron --external:better-sqlite3 --external:bindings --external:node-addon-api --minify",
+    "build:main": "esbuild app/main/main.js --bundle --platform=node --outfile=dist/main/main.js --format=cjs --external:electron --external:better-sqlite3 --external:bindings --external:node-addon-api --external:adm-zip --external:archiver --external:yauzl --minify",
     "build:preload": "esbuild app/main/preload.js --bundle --platform=browser --outfile=dist/main/preload.js --format=cjs --external:electron --minify",
     "build": "npm run build:renderer && npm run build:main && npm run build:preload",
     "start": "electron .",
@@ -24,7 +24,9 @@
     "postinstall": "electron-rebuild",
     "test": "vitest",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest --coverage"
+    "test:coverage": "vitest --coverage",
+    "test:coverage:watch": "vitest --coverage --watch",
+    "test:coverage:open": "vitest --coverage"
   },
   "build": {
     "appId": "com.aiverse.manager",
@@ -60,7 +62,10 @@
     }
   },
   "dependencies": {
+    "adm-zip": "^0.5.16",
+    "archiver": "^7.0.1",
     "better-sqlite3": "^9.6.0",
+    "yauzl": "^2.10.0",
     "chokidar": "^3.6.0",
     "exifreader": "^4.23.0",
     "keytar": "^7.9.0",

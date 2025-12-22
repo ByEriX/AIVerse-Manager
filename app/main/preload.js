@@ -7,6 +7,8 @@ const api = {
     update: (id, input) => ipcRenderer.invoke('tools:update', id, input),
     delete: (id) => ipcRenderer.invoke('tools:delete', id),
     open: (id) => ipcRenderer.invoke('tools:open', id),
+    export: (options) => ipcRenderer.invoke('tools:export', options),
+    import: (filePath, options) => ipcRenderer.invoke('tools:import', filePath, options),
     onChanged: (cb) => {
       const listener = () => cb();
       ipcRenderer.on('tools:changed', listener);

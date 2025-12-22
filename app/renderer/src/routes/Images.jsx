@@ -623,8 +623,65 @@ function ImageDetailModal({ image, metadata, onClose, onDelete, onTagsUpdate }) 
                     {metadata.ai.steps && <div><strong>Steps:</strong> {metadata.ai.steps}</div>}
                     {metadata.ai.cfgScale && <div><strong>CFG Scale:</strong> {metadata.ai.cfgScale}</div>}
                     {metadata.ai.seed && <div><strong>Seed:</strong> {metadata.ai.seed}</div>}
+                    {metadata.ai.modelHash && <div><strong>Model Hash:</strong> {metadata.ai.modelHash}</div>}
+                    {metadata.ai.vae && <div><strong>VAE:</strong> {metadata.ai.vae}</div>}
+                    {metadata.ai.vaeHash && <div><strong>VAE Hash:</strong> {metadata.ai.vaeHash}</div>}
+                    {metadata.ai.clipSkip && <div><strong>Clip Skip:</strong> {metadata.ai.clipSkip}</div>}
+                    {metadata.ai.scheduler && <div><strong>Scheduler:</strong> {metadata.ai.scheduler}</div>}
+                    {metadata.ai.hiresUpscaler && <div><strong>Hires Upscaler:</strong> {metadata.ai.hiresUpscaler}</div>}
+                    {metadata.ai.hiresSteps && <div><strong>Hires Steps:</strong> {metadata.ai.hiresSteps}</div>}
+                    {metadata.ai.hiresUpscale && <div><strong>Hires Upscale:</strong> {metadata.ai.hiresUpscale}</div>}
+                    {metadata.ai.denoisingStrength && <div><strong>Denoising Strength:</strong> {metadata.ai.denoisingStrength}</div>}
+                    {metadata.ai.ensd && <div><strong>ENSD:</strong> {metadata.ai.ensd}</div>}
+                    {metadata.ai.size && !metadata.width && <div><strong>Size:</strong> {metadata.ai.size}</div>}
                     {metadata.ai.software && <div style={{ gridColumn: '1 / -1' }}><strong>Software:</strong> {metadata.ai.software}</div>}
                   </div>
+                  
+                  {/* Loras / TI display */}
+                  {(metadata.ai.loras || metadata.ai.loraHashes || metadata.ai.tiHashes) && (
+                    <div style={{ marginTop: 8 }}>
+                      {metadata.ai.loras && (
+                        <div style={{ marginBottom: 4 }}>
+                          <strong>Loras:</strong>
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+                            {Array.isArray(metadata.ai.loras) ? (
+                              metadata.ai.loras.map((lora, i) => (
+                                <span key={i} style={{ 
+                                  fontSize: 11, 
+                                  padding: '2px 6px', 
+                                  background: 'var(--tag-bg)', 
+                                  color: 'var(--tag-text)', 
+                                  borderRadius: 4 
+                                }}>
+                                  {lora}
+                                </span>
+                              ))
+                            ) : (
+                              <span style={{ 
+                                fontSize: 11, 
+                                padding: '2px 6px', 
+                                background: 'var(--tag-bg)', 
+                                color: 'var(--tag-text)', 
+                                borderRadius: 4 
+                              }}>
+                                {metadata.ai.loras}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {metadata.ai.loraHashes && (
+                        <div style={{ marginBottom: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
+                          <strong>Lora Hashes:</strong> {metadata.ai.loraHashes}
+                        </div>
+                      )}
+                      {metadata.ai.tiHashes && (
+                        <div style={{ marginBottom: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
+                          <strong>TI Hashes:</strong> {metadata.ai.tiHashes}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   
                   {metadata.ai.description && !metadata.ai.prompt && (
                     <div style={{ marginTop: 8 }}>
