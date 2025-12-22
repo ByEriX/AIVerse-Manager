@@ -34,7 +34,21 @@ npm run rebuild:test
 npm run test
 ```
 
-3. Upgrade deps back to dev
+3. Run tests with coverage
+
+```bash
+npm run test:coverage
+```
+
+This will generate coverage reports in the `coverage/` directory. Open `coverage/index.html` in your browser to view the HTML report.
+
+4. Run tests with coverage in watch mode
+
+```bash
+npm run test:coverage:watch
+```
+
+5. Upgrade deps back to dev
 
 ```bash
 npm run rebuild:native

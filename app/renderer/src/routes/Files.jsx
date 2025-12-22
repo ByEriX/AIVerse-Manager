@@ -141,6 +141,7 @@ export default function Files() {
   }, [files, sortBy, sortAsc, filterTags]);
 
   function getFileIcon(extension) {
+    if (!extension) return '📄';
     const ext = extension.toLowerCase();
     // Audio files
     if (['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac'].includes(ext)) return '🎵';
@@ -428,8 +429,8 @@ export default function Files() {
                 <div style={{ color: 'var(--text-secondary)', fontSize: 11, marginTop: 4 }}>
                   {(file.size / 1024).toFixed(1)} KB
                 </div>
-                <div style={{ color: 'var(--text-tertiary)', fontSize: 10, marginTop: 2 }}>
-                  {file.extension.toUpperCase().substring(1)}
+                <div style={{ color: 'var(--text-tertiary)', fontSize: 10, marginTop: 2 }}>        
+                  {file.extension ? file.extension.toUpperCase().substring(1) : ''}
                 </div>
                 {file.tags && (
                   <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -482,6 +483,7 @@ function FileDetailModal({ file, onClose, onDelete, onTagsUpdate }) {
   }
 
   function getFileIcon(extension) {
+    if (!extension) return '📄';
     const ext = extension.toLowerCase();
     if (['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac'].includes(ext)) return '🎵';
     if (['.mp4', '.avi', '.mkv', '.mov', '.webm'].includes(ext)) return '🎬';

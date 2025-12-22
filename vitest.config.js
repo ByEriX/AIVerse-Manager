@@ -10,7 +10,7 @@ export default defineConfig({
     setupFiles: ['./tests/setup.js'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      reporter: ['text', 'json', 'html', 'lcov'],
       exclude: [
         'node_modules/',
         'dist/',
@@ -19,7 +19,14 @@ export default defineConfig({
         '*.config.js',
         'app/main/main.js',
         'app/main/preload.js'
-      ]
+      ],
+      thresholds: {
+        lines: 50,
+        functions: 50,
+        branches: 50,
+        statements: 50
+      },
+      reportOnFailure: true
     }
   },
   resolve: {

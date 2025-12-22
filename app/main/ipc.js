@@ -421,13 +421,38 @@ export function registerIpcHandlers() {
       
       const metadata = {};
 
+      // Helper function to normalize software names
+      function normalizeSoftware(software) {
+        if (!software) return null;
+        const lower = software.toLowerCase();
+        if (lower.includes('automatic1111') || lower.includes('a1111')) {
+          return 'Stable Diffusion WebUI (A1111)';
+        }
+        if (lower.includes('invokeai')) {
+          return 'InvokeAI';
+        }
+        return software;
+      }
+
+      // Helper function to find case-insensitive key in object
+      function findCaseInsensitiveKey(obj, targetKey) {
+        if (!obj) return null;
+        const lowerTarget = targetKey.toLowerCase();
+        for (const key in obj) {
+          if (key.toLowerCase() === lowerTarget) {
+            return key;
+          }
+        }
+        return null;
+      }
+
       // Basic EXIF
       if (tags.exif?.Make) metadata.camera = tags.exif.Make.description;
       if (tags.exif?.Model) metadata.cameraModel = tags.exif.Model.description;
       if (tags.exif?.DateTime) metadata.dateTaken = tags.exif.DateTime.description;
       if (tags.file?.['Image Width']) metadata.width = tags.file['Image Width'].value;
       if (tags.file?.['Image Height']) metadata.height = tags.file['Image Height'].value;
-      if (tags.exif?.Software) metadata.software = tags.exif.Software.description;
+      if (tags.exif?.Software) metadata.software = normalizeSoftware(tags.exif.Software.description);
       if (tags.exif?.Artist) metadata.artist = tags.exif.Artist.description;
       
       // AI Metadata parsing
@@ -438,14 +463,14 @@ export function registerIpcHandlers() {
         // Store raw values for fallback
         if (tags.png.Description) aiMetadata.description = tags.png.Description.description;
         if (tags.png.Comment) aiMetadata.comment = tags.png.Comment.description;
-        if (tags.png.Software) aiMetadata.software = tags.png.Software.description;
+        if (tags.png.Software) aiMetadata.software = normalizeSoftware(tags.png.Software.description);
         
-        // Try to parse JSON from Comment (NovelAI, Stable Diffusion WebUI format)
+        // Priority 1: Try to parse JSON from Comment (NovelAI format takes priority, then SD JSON format)
         if (tags.png.Comment) {
           try {
             const parsed = JSON.parse(tags.png.Comment.description);
             
-            // NovelAI format
+            // NovelAI format (preferred)
             if (parsed.prompt) aiMetadata.prompt = parsed.prompt;
             if (parsed.uc) aiMetadata.negativePrompt = parsed.uc; // NovelAI uses "uc" for negative prompt
             if (parsed.steps) aiMetadata.steps = parsed.steps;
@@ -458,10 +483,13 @@ export function registerIpcHandlers() {
               aiMetadata.negativePrompt = parsed.v4_negative_prompt.caption.base_caption;
             }
             
-            // Stable Diffusion format
-            if (parsed.negative_prompt) aiMetadata.negativePrompt = parsed.negative_prompt;
-            if (parsed.cfg_scale) aiMetadata.cfgScale = parsed.cfg_scale;
-            if (parsed.model) aiMetadata.model = parsed.model;
+            // Stable Diffusion JSON format (only fill if NovelAI didn't populate)
+            if (!aiMetadata.negativePrompt && parsed.negative_prompt) aiMetadata.negativePrompt = parsed.negative_prompt;
+            if (!aiMetadata.cfgScale && parsed.cfg_scale) aiMetadata.cfgScale = parsed.cfg_scale;
+            if (!aiMetadata.model && parsed.model) aiMetadata.model = parsed.model;
+            if (!aiMetadata.steps && parsed.steps) aiMetadata.steps = parsed.steps;
+            if (!aiMetadata.sampler && parsed.sampler) aiMetadata.sampler = parsed.sampler;
+            if (!aiMetadata.seed && parsed.seed) aiMetadata.seed = parsed.seed;
           } catch (e) {
             // Not JSON, might be plain text prompt - try parsing as text
             if (!aiMetadata.prompt) {
@@ -471,7 +499,15 @@ export function registerIpcHandlers() {
           }
         }
         
-        // NovelAI/A1111 format in Description
+        // Priority 2: Check SD "parameters" chunk (fill any fields NovelAI didn't populate)
+        const parametersKey = findCaseInsensitiveKey(tags.png, 'parameters');
+        if (parametersKey && tags.png[parametersKey]) {
+          const parametersText = tags.png[parametersKey].description;
+          // parseTextMetadata will only set fields that aren't already set
+          parseTextMetadata(parametersText, aiMetadata);
+        }
+        
+        // Priority 3: NovelAI/A1111 format in Description (only if no prompt found yet)
         if (tags.png.Description && !aiMetadata.prompt) {
           const desc = tags.png.Description.description;
           parseTextMetadata(desc, aiMetadata);
@@ -482,40 +518,113 @@ export function registerIpcHandlers() {
       function parseTextMetadata(text, target) {
         // Extract prompt (everything before "Negative prompt:" or generation params)
         const promptMatch = text.match(/^([\s\S]*?)(?:\nNegative prompt:|Negative prompt:|\nSteps:)/i);
-        if (promptMatch) target.prompt = promptMatch[1].trim();
+        if (promptMatch && !target.prompt) target.prompt = promptMatch[1].trim();
         
         // Extract negative prompt
         const negMatch = text.match(/Negative prompt:\s*([\s\S]*?)(?:\nSteps:|Steps:|$)/i);
-        if (negMatch) target.negativePrompt = negMatch[1].trim();
+        if (negMatch && !target.negativePrompt) target.negativePrompt = negMatch[1].trim();
         
-        // Extract generation parameters
+        // Extract generation parameters (only if not already set)
         const stepsMatch = text.match(/Steps:\s*(\d+)/i);
-        if (stepsMatch) target.steps = stepsMatch[1];
+        if (stepsMatch && !target.steps) target.steps = stepsMatch[1];
         
-        const samplerMatch = text.match(/Sampler:\s*([^,\n]+)/i);
-        if (samplerMatch) target.sampler = samplerMatch[1].trim();
+        const samplerMatch = text.match(/(?:Sampler|Sampling method):\s*([^,\n]+)/i);
+        if (samplerMatch && !target.sampler) target.sampler = samplerMatch[1].trim();
         
-        const cfgMatch = text.match(/(?:CFG scale|Scale):\s*([\d.]+)/i);
-        if (cfgMatch) target.cfgScale = cfgMatch[1];
+        const cfgMatch = text.match(/(?:CFG scale|CFG Scale|Scale):\s*([\d.]+)/i);
+        if (cfgMatch && !target.cfgScale) target.cfgScale = cfgMatch[1];
         
         const seedMatch = text.match(/Seed:\s*(\d+)/i);
-        if (seedMatch) target.seed = seedMatch[1];
+        if (seedMatch && !target.seed) target.seed = seedMatch[1];
         
         const modelMatch = text.match(/Model:\s*([^,\n]+)/i);
-        if (modelMatch) target.model = modelMatch[1].trim();
+        if (modelMatch && !target.model) target.model = modelMatch[1].trim();
         
         // NovelAI specific: look for "Undesired content" as negative prompt alternative
         if (!target.negativePrompt) {
           const undesiredMatch = text.match(/Undesired content:\s*([\s\S]*?)(?:\n\w+:|$)/i);
           if (undesiredMatch) target.negativePrompt = undesiredMatch[1].trim();
         }
+        
+        // Stable Diffusion specific fields
+        const sizeMatch = text.match(/(?:Size|Hires size):\s*(\d+x\d+)/i);
+        if (sizeMatch && !target.size) {
+          target.size = sizeMatch[1];
+          // If width/height missing from EXIF, populate from parsed size
+          if (!metadata.width || !metadata.height) {
+            const [width, height] = sizeMatch[1].split('x').map(Number);
+            if (width && height) {
+              metadata.width = width;
+              metadata.height = height;
+            }
+          }
+        }
+        
+        const modelHashMatch = text.match(/Model hash:\s*([^\s,\n]+)/i);
+        if (modelHashMatch && !target.modelHash) target.modelHash = modelHashMatch[1].trim();
+        
+        const vaeMatch = text.match(/VAE:\s*([^,\n]+)/i);
+        if (vaeMatch && !target.vae) target.vae = vaeMatch[1].trim();
+        
+        const vaeHashMatch = text.match(/VAE hash:\s*([^\s,\n]+)/i);
+        if (vaeHashMatch && !target.vaeHash) target.vaeHash = vaeHashMatch[1].trim();
+        
+        const clipSkipMatch = text.match(/Clip skip:\s*(\d+)/i);
+        if (clipSkipMatch && !target.clipSkip) target.clipSkip = clipSkipMatch[1];
+        
+        const schedulerMatch = text.match(/(?:Scheduler|Schedule):\s*([^,\n]+)/i);
+        if (schedulerMatch && !target.scheduler) target.scheduler = schedulerMatch[1].trim();
+        
+        const hiresUpscalerMatch = text.match(/Hires upscaler:\s*([^,\n]+)/i);
+        if (hiresUpscalerMatch && !target.hiresUpscaler) target.hiresUpscaler = hiresUpscalerMatch[1].trim();
+        
+        const hiresStepsMatch = text.match(/Hires steps:\s*(\d+)/i);
+        if (hiresStepsMatch && !target.hiresSteps) target.hiresSteps = hiresStepsMatch[1];
+        
+        const hiresUpscaleMatch = text.match(/Hires upscale:\s*([\d.]+)/i);
+        if (hiresUpscaleMatch && !target.hiresUpscale) target.hiresUpscale = hiresUpscaleMatch[1];
+        
+        const denoisingStrengthMatch = text.match(/Denoising strength:\s*([\d.]+)/i);
+        if (denoisingStrengthMatch && !target.denoisingStrength) target.denoisingStrength = denoisingStrengthMatch[1];
+        
+        const ensdMatch = text.match(/ENSD:\s*([^\s,\n]+)/i);
+        if (ensdMatch && !target.ensd) target.ensd = ensdMatch[1].trim();
+        
+        // Collect Lora entries (may appear multiple times)
+        const loraMatches = text.matchAll(/Lora:\s*([^,\n]+)/gi);
+        if (loraMatches) {
+          const loras = Array.from(loraMatches).map(m => m[1].trim());
+          if (loras.length > 0 && !target.loras) {
+            target.loras = loras.length === 1 ? loras[0] : loras;
+          }
+        }
+        
+        const loraHashesMatch = text.match(/Lora hashes:\s*([^\n]+)/i);
+        if (loraHashesMatch && !target.loraHashes) target.loraHashes = loraHashesMatch[1].trim();
+        
+        const tiHashesMatch = text.match(/TI hashes:\s*([^\n]+)/i);
+        if (tiHashesMatch && !target.tiHashes) target.tiHashes = tiHashesMatch[1].trim();
       }
       
-      // Check EXIF UserComment (some tools store prompts here)
-      if (tags.exif?.UserComment) {
-        const userComment = tags.exif.UserComment.description;
-        if (userComment && !aiMetadata.prompt) {
-          aiMetadata.userComment = userComment;
+      // Check EXIF/XMP/IPTC for JPEG/WebP (some tools store prompts here)
+      // Check multiple fields for SD-style metadata
+      const exifSources = [
+        tags.exif?.UserComment?.description,
+        tags.exif?.ImageDescription?.description,
+        tags.iptc?.Caption?.description,
+        tags.xmp?.Parameters?.description
+      ].filter(Boolean);
+      
+      for (const source of exifSources) {
+        if (source && !aiMetadata.prompt) {
+          // Check if it looks like SD format (contains "prompt" or "Steps:" or "Negative prompt:")
+          if (/prompt|Steps:|Negative prompt:/i.test(source)) {
+            parseTextMetadata(source, aiMetadata);
+            if (aiMetadata.prompt) break; // Stop after first successful parse
+          } else if (source === exifSources[0] && tags.exif?.UserComment) {
+            // Store UserComment as fallback if it doesn't look like SD format
+            aiMetadata.userComment = source;
+          }
         }
       }
       
@@ -822,6 +931,838 @@ export function registerIpcHandlers() {
     const combined = [...imageItems, ...fileItems, ...promptItems].filter(Boolean);
     combined.sort((a, b) => (a.lastUsedAt < b.lastUsedAt ? 1 : -1));
     return combined.slice(0, 5);
+  });
+
+  // Export: Export all tool data and optionally files/images
+  ipcMain.handle('tools:export', async (_evt, options = {}) => {
+    const { includeFiles = false, includeImages = false } = options;
+    const fs = await import('node:fs/promises');
+    const fsSync = await import('node:fs');
+    const path = await import('node:path');
+    const archiver = await import('archiver');
+    
+    // Track temp directory for cleanup
+    let tempDir = null;
+    // Track if we're returning a Promise with internal cleanup
+    let promiseReturned = false;
+    
+    try {
+      // Get all tools
+      const tools = db.prepare(`
+        SELECT id, name, docs_url AS docsUrl, app_url AS appUrl, exec_path AS execPath, 
+               icon_path AS iconPath, images_folder AS imagesFolder, files_folder AS filesFolder, 
+               settings_json AS settingsJson, created_at AS createdAt, updated_at AS updatedAt 
+        FROM tools ORDER BY name
+      `).all();
+
+      // Get all prompts
+      const prompts = db.prepare(`
+        SELECT id, tool_id AS toolId, title, content, tags, history_json AS historyJson, 
+               created_at AS createdAt, updated_at AS updatedAt 
+        FROM prompts ORDER BY tool_id, created_at DESC
+      `).all();
+
+      // Get all files metadata
+      const files = db.prepare(`
+        SELECT id, tool_id AS toolId, path, thumbnail_path AS thumbnailPath, 
+               metadata_json AS metadataJson, tags, added_at AS addedAt 
+        FROM files ORDER BY tool_id, added_at DESC
+      `).all();
+
+      // Get all images metadata
+      const images = db.prepare(`
+        SELECT id, tool_id AS toolId, path, thumbnail_path AS thumbnailPath, 
+               metadata_json AS metadataJson, tags, added_at AS addedAt 
+        FROM images ORDER BY tool_id, added_at DESC
+      `).all();
+
+      // Create export data structure
+      const exportData = {
+        version: '1.0.0',
+        exportedAt: new Date().toISOString(),
+        tools,
+        prompts,
+        files: files.map(f => ({
+          ...f,
+          metadata: f.metadataJson ? JSON.parse(f.metadataJson) : null
+        })),
+        images: images.map(i => ({
+          ...i,
+          metadata: i.metadataJson ? JSON.parse(i.metadataJson) : null
+        }))
+      };
+
+      // Create temporary directory for export
+      tempDir = path.join(app.getPath('temp'), `aiverse-export-${Date.now()}`);
+      await fs.mkdir(tempDir, { recursive: true });
+
+      // Copy icon files if they exist (export all icons, not just ones in userData)
+      // Update icon paths in exportData to relative paths before writing data.json
+      for (const tool of tools) {
+        if (tool.iconPath) {
+          // Skip data URLs, HTTP URLs, and bundled assets
+          if (tool.iconPath.startsWith('data:') || 
+              tool.iconPath.startsWith('http://') || 
+              tool.iconPath.startsWith('https://') ||
+              (tool.iconPath.startsWith('/') && (tool.iconPath.includes('/assets/') || tool.iconPath.includes('/_vite/')))) {
+            // These are external/bundled resources, keep as-is in export
+            continue;
+          }
+          
+          try {
+            const iconExists = await fs.access(tool.iconPath).then(() => true).catch(() => false);
+            if (iconExists) {
+              const iconDir = path.join(tempDir, 'icons');
+              await fs.mkdir(iconDir, { recursive: true });
+              const iconExt = path.extname(tool.iconPath);
+              const iconFileName = `tool-${tool.id}${iconExt}`;
+              await fs.copyFile(tool.iconPath, path.join(iconDir, iconFileName));
+              // Update icon path in export data to relative path
+              const toolInExportData = exportData.tools.find(t => t.id === tool.id);
+              if (toolInExportData) {
+                toolInExportData.iconPath = `icons/${iconFileName}`;
+              }
+            }
+          } catch (e) {
+            console.warn(`Failed to copy icon for tool ${tool.id}:`, e);
+          }
+        }
+      }
+
+      // Write data.json after icon paths have been updated to relative paths
+      await fs.writeFile(
+        path.join(tempDir, 'data.json'),
+        JSON.stringify(exportData, null, 2)
+      );
+
+      // Copy files if requested
+      if (includeFiles) {
+        const filesDir = path.join(tempDir, 'files');
+        await fs.mkdir(filesDir, { recursive: true });
+        
+        for (const file of files) {
+          try {
+            const fileExists = await fs.access(file.path).then(() => true).catch(() => false);
+            if (fileExists) {
+              const tool = tools.find(t => t.id === file.toolId);
+              if (tool && tool.filesFolder && file.path.startsWith(tool.filesFolder)) {
+                const relativePath = path.relative(tool.filesFolder, file.path);
+                const targetPath = path.join(filesDir, `tool-${file.toolId}`, relativePath);
+                const targetDir = path.dirname(targetPath);
+                await fs.mkdir(targetDir, { recursive: true });
+                await fs.copyFile(file.path, targetPath);
+              }
+            }
+          } catch (e) {
+            console.warn(`Failed to copy file ${file.path}:`, e);
+          }
+        }
+      }
+
+      // Copy images if requested
+      if (includeImages) {
+        const imagesDir = path.join(tempDir, 'images');
+        await fs.mkdir(imagesDir, { recursive: true });
+        
+        for (const image of images) {
+          try {
+            const imageExists = await fs.access(image.path).then(() => true).catch(() => false);
+            if (imageExists) {
+              const tool = tools.find(t => t.id === image.toolId);
+              if (tool && tool.imagesFolder && image.path.startsWith(tool.imagesFolder)) {
+                const relativePath = path.relative(tool.imagesFolder, image.path);
+                const targetPath = path.join(imagesDir, `tool-${image.toolId}`, relativePath);
+                const targetDir = path.dirname(targetPath);
+                await fs.mkdir(targetDir, { recursive: true });
+                await fs.copyFile(image.path, targetPath);
+              }
+            }
+          } catch (e) {
+            console.warn(`Failed to copy image ${image.path}:`, e);
+          }
+        }
+      }
+
+      // Ask user where to save the export file BEFORE creating zip
+      // This allows us to stream directly to the output file
+      const windows = BrowserWindow.getAllWindows();
+      const win = windows.length > 0 ? windows[0] : null;
+      const result = await dialog.showSaveDialog(win, {
+        title: 'Export Tool Data',
+        defaultPath: `aiverse-export-${new Date().toISOString().split('T')[0]}.zip`,
+        filters: [
+          { name: 'ZIP Files', extensions: ['zip'] },
+          { name: 'All Files', extensions: ['*'] }
+        ]
+      });
+
+      if (result.canceled || !result.filePath) {
+        // Clean up temp directory
+        await fs.rm(tempDir, { recursive: true, force: true });
+        return { canceled: true };
+      }
+
+      // Track that we're returning a Promise with internal cleanup
+      // This prevents the finally block from cleaning up while the archive is being written
+      promiseReturned = true;
+
+      // Create ZIP file using archiver with streaming
+      // This streams files directly from disk to the zip file without loading everything into memory
+      const archivePromise = new Promise(async (resolve, reject) => {
+        const output = fsSync.createWriteStream(result.filePath);
+        // Handle both default export and named export
+        const Archiver = archiver.default || archiver;
+        const archive = Archiver('zip', {
+          zlib: { level: 9 } // Maximum compression
+        });
+
+        // Pipe archive data to the file
+        archive.pipe(output);
+
+        // Cleanup helper
+        const cleanup = async () => {
+          try {
+            await fs.rm(tempDir, { recursive: true, force: true });
+          } catch (cleanupErr) {
+            console.warn('Failed to clean up temp directory:', cleanupErr);
+          }
+        };
+
+        // Handle archive errors
+        archive.on('error', async (err) => {
+          await cleanup();
+          reject(new Error(`Archive error: ${err.message}`));
+        });
+
+        // Handle output stream errors
+        output.on('error', async (err) => {
+          await cleanup();
+          reject(new Error(`File write error: ${err.message}`));
+        });
+
+        // Handle successful completion
+        output.on('close', async () => {
+          await cleanup();
+          resolve({ 
+            ok: true, 
+            filePath: result.filePath,
+            stats: {
+              tools: tools.length,
+              prompts: prompts.length,
+              files: files.length,
+              images: images.length
+            }
+          });
+        });
+
+        // Add the entire temp directory to the archive
+        // This streams files directly from disk, avoiding memory issues
+        archive.directory(tempDir, false);
+
+        // Finalize the archive (this will trigger the 'close' event)
+        archive.finalize();
+      });
+      
+      return archivePromise;
+    } catch (e) {
+      console.error('Export failed:', e);
+      throw new Error(`Export failed: ${e.message}`);
+    } finally {
+      // Only clean up temp directory if we're not returning a Promise with internal cleanup
+      // The Promise's cleanup handler will handle cleanup when the archive completes
+      if (tempDir && !promiseReturned) {
+        try {
+          await fs.rm(tempDir, { recursive: true, force: true });
+        } catch (cleanupErr) {
+          // Log cleanup errors but don't throw - we don't want to mask the original error
+          console.warn('Failed to clean up temp directory:', cleanupErr);
+        }
+      }
+    }
+  });
+
+  // Import: Import tool data and optionally files/images from ZIP
+  ipcMain.handle('tools:import', async (_evt, filePath, options = {}) => {
+    const { includeFiles = false, includeImages = false, mergeMode = 'skip' } = options; // mergeMode: 'skip' | 'replace' | 'merge'
+    const fs = await import('node:fs/promises');
+    const fsSync = await import('node:fs');
+    const path = await import('node:path');
+    const yauzlModule = await import('yauzl');
+    const yauzl = yauzlModule.default || yauzlModule.default?.default || yauzlModule;
+    
+    // Track temp directory for cleanup
+    let tempDir = null;
+    
+    try {
+      // Verify file exists and is actually a file (not a directory)
+      try {
+        const fileStats = await fs.stat(filePath);
+        if (!fileStats.isFile()) {
+          throw new Error('Import path must be a file, not a directory');
+        }
+      } catch (e) {
+        if (e.code === 'ENOENT') {
+          throw new Error('Import file not found');
+        }
+        throw new Error(`Invalid import file: ${e.message}`);
+      }
+      
+      // Extract ZIP to temp directory using yauzl for streaming (handles files >2GiB)
+      tempDir = path.join(app.getPath('temp'), `aiverse-import-${Date.now()}`);
+      await fs.mkdir(tempDir, { recursive: true });
+      
+      // Use yauzl for streaming extraction (handles large files without loading into memory)
+      await new Promise((resolve, reject) => {
+        let pendingExtractions = 0;
+        let hasError = false;
+        let entriesFinished = false;
+        
+        const checkComplete = () => {
+          if (entriesFinished && pendingExtractions === 0 && !hasError) {
+            resolve();
+          }
+        };
+        
+        yauzl.open(filePath, { lazyEntries: true }, (err, zipfile) => {
+          if (err) return reject(err);
+          
+          zipfile.readEntry();
+          
+          zipfile.on('entry', (entry) => {
+            // Normalize path separators (Windows uses backslashes, ZIP uses forward slashes)
+            const normalizedFileName = entry.fileName.replace(/\\/g, '/');
+            
+            if (/\/$/.test(normalizedFileName)) {
+              // Directory entry - create directory
+              const dirPath = path.join(tempDir, normalizedFileName);
+              try {
+                fsSync.mkdirSync(dirPath, { recursive: true });
+              } catch (dirErr) {
+                // Ignore errors if directory already exists
+                if (dirErr.code !== 'EEXIST') {
+                  console.warn(`Failed to create directory ${normalizedFileName}:`, dirErr);
+                }
+              }
+              zipfile.readEntry();
+            } else {
+              // File entry - extract file
+              pendingExtractions++;
+              zipfile.openReadStream(entry, (err, readStream) => {
+                if (err) {
+                  console.warn(`Failed to extract ${normalizedFileName}:`, err);
+                  pendingExtractions--;
+                  zipfile.readEntry();
+                  checkComplete();
+                  return;
+                }
+                
+                const targetFilePath = path.join(tempDir, normalizedFileName);
+                const dirPath = path.dirname(targetFilePath);
+                try {
+                  fsSync.mkdirSync(dirPath, { recursive: true });
+                } catch (dirErr) {
+                  // Ignore errors if directory already exists
+                  if (dirErr.code !== 'EEXIST') {
+                    console.warn(`Failed to create directory for ${normalizedFileName}:`, dirErr);
+                  }
+                }
+                
+                const writeStream = fsSync.createWriteStream(targetFilePath);
+                
+                readStream.on('error', (err) => {
+                  console.warn(`Read error for ${normalizedFileName}:`, err);
+                  pendingExtractions--;
+                  zipfile.readEntry();
+                  checkComplete();
+                });
+                
+                writeStream.on('close', () => {
+                  pendingExtractions--;
+                  zipfile.readEntry();
+                  checkComplete();
+                });
+                
+                writeStream.on('error', (err) => {
+                  console.warn(`Failed to write ${normalizedFileName}:`, err);
+                  hasError = true;
+                  pendingExtractions--;
+                  zipfile.readEntry();
+                  checkComplete();
+                });
+                
+                readStream.pipe(writeStream);
+              });
+            }
+          });
+          
+          zipfile.on('end', () => {
+            entriesFinished = true;
+            checkComplete();
+          });
+          
+          zipfile.on('error', (err) => {
+            hasError = true;
+            reject(new Error(`ZIP file error: ${err.message}`));
+          });
+        });
+      });
+      
+      // Read data.json
+      const dataPath = path.join(tempDir, 'data.json');
+      
+      // Verify data.json exists and is a file
+      try {
+        const stats = await fs.stat(dataPath);
+        if (!stats.isFile()) {
+          throw new Error('Invalid export file: data.json is not a file (it\'s a directory)');
+        }
+      } catch (e) {
+        if (e.code === 'ENOENT') {
+          throw new Error('Invalid export file: data.json not found in ZIP');
+        }
+        if (e.message.startsWith('Invalid export file:')) {
+          throw e; // Re-throw if already wrapped
+        }
+        throw new Error(`Invalid export file: ${e.message}`);
+      }
+      
+      const dataContent = await fs.readFile(dataPath, 'utf-8');
+      const importData = JSON.parse(dataContent);
+      
+      if (!importData.tools || !Array.isArray(importData.tools)) {
+        throw new Error('Invalid export file: missing tools data');
+      }
+
+      const stats = {
+        tools: { created: 0, skipped: 0, replaced: 0 },
+        prompts: { created: 0, skipped: 0 },
+        files: { created: 0, skipped: 0 },
+        images: { created: 0, skipped: 0 }
+      };
+
+      // Create tool ID mapping for all tools
+      const toolIdMap = {};
+      
+      // Import tools
+      for (const toolData of importData.tools) {
+        const existing = db.prepare(`SELECT id FROM tools WHERE name = ?`).get(toolData.name);
+        
+        let toolId;
+        if (existing) {
+          if (mergeMode === 'skip') {
+            toolId = existing.id;
+            stats.tools.skipped++;
+          } else if (mergeMode === 'replace') {
+            // Update existing tool (set icon_path to null initially, will be updated after icon copy)
+            db.prepare(`
+              UPDATE tools SET 
+                docs_url = ?, app_url = ?, exec_path = ?, icon_path = ?, 
+                images_folder = ?, files_folder = ?, settings_json = ?, updated_at = datetime('now')
+              WHERE id = ?
+            `).run(
+              toolData.docsUrl ?? null,
+              toolData.appUrl ?? null,
+              toolData.execPath ?? null,
+              null, // icon_path set to null, will be updated after icon copy
+              toolData.imagesFolder ?? null,
+              toolData.filesFolder ?? null,
+              toolData.settingsJson ?? null,
+              existing.id
+            );
+            toolId = existing.id;
+            stats.tools.replaced++;
+          } else {
+            // merge: create new with different name
+            const newName = `${toolData.name} (imported)`;
+            const info = db.prepare(`
+              INSERT INTO tools (name, docs_url, app_url, exec_path, icon_path, images_folder, files_folder, settings_json)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+              newName,
+              toolData.docsUrl ?? null,
+              toolData.appUrl ?? null,
+              toolData.execPath ?? null,
+              null, // icon_path set to null, will be updated after icon copy
+              toolData.imagesFolder ?? null,
+              toolData.filesFolder ?? null,
+              toolData.settingsJson ?? null
+            );
+            toolId = Number(info.lastInsertRowid);
+            stats.tools.created++;
+          }
+        } else {
+          // Create new tool (set icon_path to null initially, will be updated after icon copy)
+          const info = db.prepare(`
+            INSERT INTO tools (name, docs_url, app_url, exec_path, icon_path, images_folder, files_folder, settings_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            toolData.name,
+            toolData.docsUrl ?? null,
+            toolData.appUrl ?? null,
+            toolData.execPath ?? null,
+            null, // icon_path set to null, will be updated after icon copy
+            toolData.imagesFolder ?? null,
+            toolData.filesFolder ?? null,
+            toolData.settingsJson ?? null
+          );
+          toolId = Number(info.lastInsertRowid);
+          stats.tools.created++;
+        }
+
+        // Map old tool ID to new tool ID
+        toolIdMap[toolData.id] = toolId;
+
+        // Copy icon if it exists in the import
+        // Similar approach to files/images: always try to copy from export if available
+        let iconTargetPath = null;
+        
+        if (toolData.iconPath) {
+          // Handle data URLs, HTTP URLs, and bundled assets - set directly
+          if (toolData.iconPath.startsWith('data:') || 
+              toolData.iconPath.startsWith('http://') || 
+              toolData.iconPath.startsWith('https://') ||
+              (toolData.iconPath.startsWith('/') && (toolData.iconPath.includes('/assets/') || toolData.iconPath.includes('/_vite/')))) {
+            // These are external/bundled resources, set directly
+            iconTargetPath = toolData.iconPath;
+          }
+          // Handle relative paths from export (icons/...)
+          else if (toolData.iconPath.startsWith('icons/')) {
+            const iconSourcePath = path.join(tempDir, toolData.iconPath);
+            try {
+              const iconExists = await fs.access(iconSourcePath).then(() => true).catch(() => false);
+              if (iconExists) {
+                const userData = app.getPath('userData');
+                const iconsDir = path.join(userData, 'template-icons');
+                await fs.mkdir(iconsDir, { recursive: true });
+                const iconExt = path.extname(toolData.iconPath);
+                const iconFileName = `tool-${toolId}-${Date.now()}${iconExt}`;
+                iconTargetPath = path.join(iconsDir, iconFileName);
+                await fs.copyFile(iconSourcePath, iconTargetPath);
+              } else {
+                console.warn(`Icon file not found in export: ${iconSourcePath}`);
+              }
+            } catch (e) {
+              console.warn(`Failed to copy icon for tool ${toolId}:`, e);
+            }
+          } else {
+            // Handle absolute paths - first check if it exists, otherwise try to find in export
+            let iconNeedsUpdate = false;
+            
+            // Check if the icon path exists and is accessible
+            try {
+              const stats = await fs.stat(toolData.iconPath);
+              if (!stats.isFile()) {
+                // Path exists but isn't a file
+                iconNeedsUpdate = true;
+              } else {
+                // Path exists and is valid, use it
+                iconTargetPath = toolData.iconPath;
+              }
+            } catch (e) {
+              // Path doesn't exist or isn't accessible, try to find in export
+              iconNeedsUpdate = true;
+            }
+            
+            if (iconNeedsUpdate) {
+              // Try to find the icon in the temp directory (in case it was exported)
+              // First try with the exact filename from the path
+              const iconFileName = path.basename(toolData.iconPath);
+              let possibleSourcePath = path.join(tempDir, 'icons', iconFileName);
+              let iconExistsInTemp = await fs.access(possibleSourcePath).then(() => true).catch(() => false);
+              
+              // If not found, try to find any icon for this tool (export uses tool-{id}.{ext} format)
+              if (!iconExistsInTemp) {
+                try {
+                  const iconsDir = path.join(tempDir, 'icons');
+                  const iconFiles = await fs.readdir(iconsDir);
+                  // Look for icon file that matches the tool ID pattern
+                  const matchingIcon = iconFiles.find(f => f.startsWith(`tool-${toolData.id}.`) || f.startsWith(`tool-${toolData.id}-`));
+                  if (matchingIcon) {
+                    possibleSourcePath = path.join(iconsDir, matchingIcon);
+                    iconExistsInTemp = true;
+                  }
+                } catch (e) {
+                  // Icons directory doesn't exist or can't be read
+                }
+              }
+              
+              if (iconExistsInTemp) {
+                // Copy from temp directory
+                const userData = app.getPath('userData');
+                const iconsDir = path.join(userData, 'template-icons');
+                await fs.mkdir(iconsDir, { recursive: true });
+                const iconExt = path.extname(possibleSourcePath) || path.extname(toolData.iconPath) || '.png';
+                const newIconFileName = `tool-${toolId}-${Date.now()}${iconExt}`;
+                iconTargetPath = path.join(iconsDir, newIconFileName);
+                await fs.copyFile(possibleSourcePath, iconTargetPath);
+              } else {
+                // Icon not found, skip it
+                console.warn(`Icon not found for tool ${toolId}: ${toolData.iconPath} (also not in export)`);
+              }
+            }
+          }
+        } else {
+          // No iconPath in data, but try to find icon in export anyway (in case it was exported but path wasn't saved)
+          try {
+            const iconsDir = path.join(tempDir, 'icons');
+            const iconFiles = await fs.readdir(iconsDir);
+            // Look for icon file that matches the tool ID pattern
+            const matchingIcon = iconFiles.find(f => f.startsWith(`tool-${toolData.id}.`) || f.startsWith(`tool-${toolData.id}-`));
+            if (matchingIcon) {
+              const iconSourcePath = path.join(iconsDir, matchingIcon);
+              const userData = app.getPath('userData');
+              const targetIconsDir = path.join(userData, 'template-icons');
+              await fs.mkdir(targetIconsDir, { recursive: true });
+              const iconExt = path.extname(matchingIcon) || '.png';
+              const newIconFileName = `tool-${toolId}-${Date.now()}${iconExt}`;
+              iconTargetPath = path.join(targetIconsDir, newIconFileName);
+              await fs.copyFile(iconSourcePath, iconTargetPath);
+            }
+          } catch (e) {
+            // Icons directory doesn't exist or can't be read, that's okay
+          }
+        }
+        
+        // Update tool icon path if we have a valid path
+        if (iconTargetPath) {
+          db.prepare(`UPDATE tools SET icon_path = ? WHERE id = ?`).run(iconTargetPath, toolId);
+        }
+      }
+
+      // Import prompts
+      if (importData.prompts && Array.isArray(importData.prompts)) {
+        for (const promptData of importData.prompts) {
+          const newToolId = toolIdMap[promptData.toolId];
+          if (!newToolId) continue;
+          
+          db.prepare(`
+            INSERT INTO prompts (tool_id, title, content, tags, history_json)
+            VALUES (?, ?, ?, ?, ?)
+          `).run(
+            newToolId,
+            promptData.title,
+            promptData.content,
+            promptData.tags ?? null,
+            promptData.historyJson ?? null
+          );
+          stats.prompts.created++;
+        }
+      }
+
+      // Import files metadata
+      if (importData.files && Array.isArray(importData.files)) {
+        for (const fileData of importData.files) {
+          const newToolId = toolIdMap[fileData.toolId];
+          if (!newToolId) continue;
+          
+          const tool = db.prepare(`SELECT files_folder FROM tools WHERE id = ?`).get(newToolId);
+          
+          // Determine target folder - use tool's folder if it exists and is accessible, otherwise use app folder
+          let targetFolder = tool?.files_folder;
+          let folderNeedsUpdate = false;
+          
+          if (!targetFolder) {
+            // No folder configured, create one in userData
+            const userData = app.getPath('userData');
+            targetFolder = path.join(userData, 'tool-files', `tool-${newToolId}`);
+            folderNeedsUpdate = true;
+          } else {
+            // Check if the folder exists and is accessible
+            // Use fs.stat() which is more reliable for non-existent drives on Windows
+            let folderIsValid = false;
+            try {
+              const stats = await fs.stat(targetFolder);
+              if (stats.isDirectory()) {
+                // Try to verify write access by attempting to create a test file
+                const testFile = path.join(targetFolder, `.aiverse-write-test-${Date.now()}`);
+                try {
+                  await fs.writeFile(testFile, '');
+                  await fs.unlink(testFile);
+                  folderIsValid = true;
+                } catch (writeErr) {
+                  // Can't write to folder, it's not valid
+                  folderIsValid = false;
+                }
+              }
+            } catch (e) {
+              // Path doesn't exist, drive doesn't exist, or other error
+              folderIsValid = false;
+            }
+            
+            if (!folderIsValid) {
+              // Folder doesn't exist or isn't accessible, create one in userData instead
+              const userData = app.getPath('userData');
+              targetFolder = path.join(userData, 'tool-files', `tool-${newToolId}`);
+              folderNeedsUpdate = true;
+            }
+          }
+          
+          // Create folder and update database if needed
+          if (folderNeedsUpdate) {
+            await fs.mkdir(targetFolder, { recursive: true });
+            db.prepare(`UPDATE tools SET files_folder = ? WHERE id = ?`).run(targetFolder, newToolId);
+          }
+          
+          // Only import files if includeFiles is true
+          if (!includeFiles) {
+            // Skip creating database entries for files when not importing them
+            continue;
+          }
+          
+          // Copy the file and preserve folder structure by extracting relative path from export
+          const originalTool = importData.tools.find(t => t.id === fileData.toolId);
+          const relativePath = originalTool?.filesFolder 
+            ? path.relative(originalTool.filesFolder, fileData.path)
+            : path.basename(fileData.path);
+          
+          const fileSourcePath = path.join(tempDir, 'files', `tool-${fileData.toolId}`, relativePath);
+          let targetPath = fileData.path;
+          
+          try {
+            const fileExists = await fs.access(fileSourcePath).then(() => true).catch(() => false);
+            if (fileExists) {
+              // Preserve folder structure by using the relative path
+              targetPath = path.join(targetFolder, relativePath);
+              const targetDir = path.dirname(targetPath);
+              await fs.mkdir(targetDir, { recursive: true });
+              await fs.copyFile(fileSourcePath, targetPath);
+              
+              // Only create database entry if file was successfully copied
+              db.prepare(`
+                INSERT INTO files (tool_id, path, thumbnail_path, metadata_json, tags)
+                VALUES (?, ?, ?, ?, ?)
+              `).run(
+                newToolId,
+                targetPath,
+                fileData.thumbnailPath ?? null,
+                fileData.metadata ? JSON.stringify(fileData.metadata) : null,
+                fileData.tags ?? null
+              );
+              stats.files.created++;
+            }
+          } catch (e) {
+            console.warn(`Failed to copy file ${fileData.path}:`, e);
+            continue;
+          }
+        }
+      }
+
+      // Import images metadata
+      if (importData.images && Array.isArray(importData.images)) {
+        for (const imageData of importData.images) {
+          const newToolId = toolIdMap[imageData.toolId];
+          if (!newToolId) continue;
+          
+          const tool = db.prepare(`SELECT images_folder FROM tools WHERE id = ?`).get(newToolId);
+          
+          // Determine target folder - use tool's folder if it exists and is accessible, otherwise use app folder
+          let targetFolder = tool?.images_folder;
+          let folderNeedsUpdate = false;
+          
+          if (!targetFolder) {
+            // No folder configured, create one in userData
+            const userData = app.getPath('userData');
+            targetFolder = path.join(userData, 'tool-images', `tool-${newToolId}`);
+            folderNeedsUpdate = true;
+          } else {
+            // Check if the folder exists and is accessible
+            // Use fs.stat() which is more reliable for non-existent drives on Windows
+            let folderIsValid = false;
+            try {
+              const stats = await fs.stat(targetFolder);
+              if (stats.isDirectory()) {
+                // Try to verify write access by attempting to create a test file
+                const testFile = path.join(targetFolder, `.aiverse-write-test-${Date.now()}`);
+                try {
+                  await fs.writeFile(testFile, '');
+                  await fs.unlink(testFile);
+                  folderIsValid = true;
+                } catch (writeErr) {
+                  // Can't write to folder, it's not valid
+                  folderIsValid = false;
+                }
+              }
+            } catch (e) {
+              // Path doesn't exist, drive doesn't exist, or other error
+              folderIsValid = false;
+            }
+            
+            if (!folderIsValid) {
+              // Folder doesn't exist or isn't accessible, create one in userData instead
+              const userData = app.getPath('userData');
+              targetFolder = path.join(userData, 'tool-images', `tool-${newToolId}`);
+              folderNeedsUpdate = true;
+            }
+          }
+          
+          // Create folder and update database if needed
+          if (folderNeedsUpdate) {
+            await fs.mkdir(targetFolder, { recursive: true });
+            db.prepare(`UPDATE tools SET images_folder = ? WHERE id = ?`).run(targetFolder, newToolId);
+          }
+          
+          // Only import images if includeImages is true
+          if (!includeImages) {
+            // Skip creating database entries for images when not importing them
+            continue;
+          }
+          
+          // Copy the image and preserve folder structure by extracting relative path from export
+          const originalTool = importData.tools.find(t => t.id === imageData.toolId);
+          const relativePath = originalTool?.imagesFolder 
+            ? path.relative(originalTool.imagesFolder, imageData.path)
+            : path.basename(imageData.path);
+          
+          const imageSourcePath = path.join(tempDir, 'images', `tool-${imageData.toolId}`, relativePath);
+          let targetPath = imageData.path;
+          
+          try {
+            const imageExists = await fs.access(imageSourcePath).then(() => true).catch(() => false);
+            if (imageExists) {
+              // Preserve folder structure by using the relative path
+              targetPath = path.join(targetFolder, relativePath);
+              const targetDir = path.dirname(targetPath);
+              await fs.mkdir(targetDir, { recursive: true });
+              await fs.copyFile(imageSourcePath, targetPath);
+              
+              // Only create database entry if image was successfully copied
+              db.prepare(`
+                INSERT INTO images (tool_id, path, thumbnail_path, metadata_json, tags)
+                VALUES (?, ?, ?, ?, ?)
+              `).run(
+                newToolId,
+                targetPath,
+                imageData.thumbnailPath ?? null,
+                imageData.metadata ? JSON.stringify(imageData.metadata) : null,
+                imageData.tags ?? null
+              );
+              stats.images.created++;
+            }
+          } catch (e) {
+            console.warn(`Failed to copy image ${imageData.path}:`, e);
+            continue;
+          }
+        }
+      }
+
+      notifyAllToolsChanged();
+      notifyAllRecentChanged();
+
+      return { ok: true, stats };
+    } catch (e) {
+      console.error('Import failed:', e);
+      throw new Error(`Import failed: ${e.message}`);
+    } finally {
+      // Always clean up temp directory, even if an error occurred
+      if (tempDir) {
+        try {
+          await fs.rm(tempDir, { recursive: true, force: true });
+        } catch (cleanupErr) {
+          // Log cleanup errors but don't throw - we don't want to mask the original error
+          console.warn('Failed to clean up temp directory:', cleanupErr);
+        }
+      }
+    }
   });
 }
 
