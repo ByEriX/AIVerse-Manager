@@ -2,14 +2,15 @@ import path from 'node:path';
 import { app, BrowserWindow } from 'electron';
 import { registerIpcHandlers } from './ipc.js';
 
-const isDev = process.env.NODE_ENV !== 'production';
+const isDev = !app.isPackaged;
 
 function createMainWindow() {
+  const appPath = app.getAppPath();
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(process.cwd(), 'dist/main/preload.js'),
+      preload: path.join(appPath, 'dist/main/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
@@ -20,7 +21,7 @@ function createMainWindow() {
     win.loadURL('http://localhost:5174');
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
-    win.loadFile(path.join(process.cwd(), 'app/renderer/dist/index.html'));
+    win.loadFile(path.join(appPath, 'app/renderer/dist/index.html'));
   }
 }
 

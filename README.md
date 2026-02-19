@@ -54,7 +54,7 @@ npm run test:coverage:watch
 npm run rebuild:native
 ```
 
-## Build (Might not work)
+## Build
 
 ```bash
 npm run dist
